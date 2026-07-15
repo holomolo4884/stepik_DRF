@@ -1,14 +1,18 @@
 from drf_spectacular.utils import extend_schema
+from django.db.models import Avg
+from django.shortcuts import get_object_or_404
 
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticatedOrReadOnly
 
 from apps.common.paginations import CustomPagination
+from apps.common.permissions import IsOwnerOrReadOnly
 from apps.profiles.models import OrderItem, ShippingAddress, Order
 from apps.sellers.models import Seller
 from apps.shop.filters import ProductFilter
-from apps.shop.models import Category, Product
+from apps.shop.models import Category, Product, Review
 from apps.shop.schema_examples import PRODUCT_PARAM_EXAMPLE
 from apps.shop.serializers import (
     CategorySerializer,
@@ -16,7 +20,8 @@ from apps.shop.serializers import (
     OrderItemSerializer,
     ToggleCartItemSerializer,
     CheckoutSerializer,
-    OrderSerializer
+    OrderSerializer,
+    ReviewSerializer
 )
 
 tags = ["Shop"]
@@ -258,3 +263,142 @@ class CheckoutView(APIView):
         serializer = OrderSerializer(order)
         return Response(data={"message": "Checkout Successful", "item": serializer.data},
                         status=status.HTTP_200_OK)
+
+
+class ReviewListView(APIView):
+    permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get(self, request):
+        queryset = Review.objects.filter(is_deleted=False)
+        product_id = request.query_params.get('product')
+
+        if product_id:
+            queryset = queryset.filter(product_id=product_id)
+
+        serializer = ReviewSerializer(queryset, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        serializer = ReviewSerializer(data=request.data, context={'request': request})
+
+        if serializer.is_valid():
+            user = request.user
+            product = serializer.validated_data.get('product')
+
+            if Review.objects.filter(user=user, product=product,
+                                     is_deleted=False).exists():
+                return Response(
+                    {"error": "You have already left a review for this product"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            review = serializer.save()
+            self.update_product_rating(review.product)
+
+            return Response(
+                serializer.data,
+                status=status.HTTP_201_CREATED
+            )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def update_product_rating(self, product):
+        avg_rating = \
+        product.reviews.filter(is_deleted=False).aggregate(avg=Avg('rating'))['avg']
+        product.average_rating = avg_rating if avg_rating else 0
+        product.save()
+
+
+class ReviewDetailView(APIView):
+    permission_classes = [IsAuthenticatedOrReadOnly, IsOwnerOrReadOnly]
+
+    def get(self, request, pk):
+        review = get_object_or_404(Review, pk=pk, is_deleted=False)
+        self.check_object_permissions(request, review)
+
+        serializer = ReviewSerializer(review, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, pk):
+        review = get_object_or_404(Review, pk=pk, is_deleted=False)
+        self.check_object_permissions(request, review)
+
+        serializer = ReviewSerializer(
+            review,
+            data=request.data,
+            context={'request': request}
+        )
+
+        if serializer.is_valid():
+            new_product = serializer.validated_data.get('product')
+            if new_product and new_product != review.product:
+                if Review.objects.filter(
+                        user=request.user,
+                        product=new_product,
+                        is_deleted=False
+                ).exclude(pk=pk).exists():
+                    return Response(
+                        {"error": "You have already left a review for this product"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            updated_review = serializer.save()
+            self.update_product_rating(updated_review.product)
+
+            return Response(
+                serializer.data,
+                status=status.HTTP_200_OK
+            )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def patch(self, request, pk):
+        review = get_object_or_404(Review, pk=pk, is_deleted=False)
+        self.check_object_permissions(request, review)
+
+        serializer = ReviewSerializer(
+            review,
+            data=request.data,
+            partial=True,
+            context={'request': request}
+        )
+
+        if serializer.is_valid():
+            new_product = serializer.validated_data.get('product')
+            if new_product and new_product != review.product:
+                if Review.objects.filter(
+                        user=request.user,
+                        product=new_product,
+                        is_deleted=False
+                ).exclude(pk=pk).exists():
+                    return Response(
+                        {"error": "You have already left a review for this product"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            updated_review = serializer.save()
+            self.update_product_rating(updated_review.product)
+
+            return Response(
+                serializer.data,
+                status=status.HTTP_200_OK
+            )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        review = get_object_or_404(Review, pk=pk, is_deleted=False)
+        self.check_object_permissions(request, review)
+
+        product = review.product
+        review.is_deleted = True
+        review.save()
+        self.update_product_rating(product)
+
+        return Response(
+            {"message": "Отзыв успешно удален"},
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+    def update_product_rating(self, product):
+        avg_rating = \
+        product.reviews.filter(is_deleted=False).aggregate(avg=Avg('rating'))['avg']
+        product.average_rating = avg_rating if avg_rating else 0
+        product.save()

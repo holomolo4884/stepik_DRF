@@ -3,6 +3,7 @@ from django.db import models
 
 from apps.common.models import BaseModel, IsDeletedModel
 from apps.sellers.models import Seller
+from apps.accounts.models import User
 
 
 class Category(BaseModel):
@@ -48,13 +49,15 @@ class Product(IsDeletedModel):
         image3 (ImageField): The third image of the product.
     """
 
-    seller = models.ForeignKey(Seller, on_delete=models.SET_NULL, related_name="products", null=True)
+    seller = models.ForeignKey(Seller, on_delete=models.SET_NULL,
+                               related_name="products", null=True)
     name = models.CharField(max_length=100)
     slug = AutoSlugField(populate_from="name", unique=True, db_index=True)
     desc = models.TextField()
     price_old = models.DecimalField(max_digits=10, decimal_places=2, null=True)
     price_current = models.DecimalField(max_digits=10, decimal_places=2)
-    category = models.ForeignKey(Category, on_delete=models.CASCADE, related_name="products")
+    category = models.ForeignKey(Category, on_delete=models.CASCADE,
+                                 related_name="products")
     in_stock = models.IntegerField(default=5)
 
     # Only 3 images are allowed
@@ -62,6 +65,20 @@ class Product(IsDeletedModel):
     image2 = models.ImageField(upload_to='product_images/', blank=True)
     image3 = models.ImageField(upload_to='product_images/', blank=True)
 
+    average_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+
 
     def __str__(self):
         return self.name
+
+
+class Review(IsDeletedModel):
+    user = models.ForeignKey(User, on_delete=models.CASCADE,
+                             related_name='reviews')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE,
+                                related_name='reviews')
+    rating = models.IntegerField(choices=[(1, 1), (2, 2), (3, 3), (4, 4), (5, 5)])
+    text = models.TextField()
+
+    class Meta:
+        unique_together = ['user', 'product']

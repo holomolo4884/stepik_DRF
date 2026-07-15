@@ -70,7 +70,8 @@ class Order(BaseModel):
         __str__():
             Returns a string representation of the transaction reference.
         save(*args, **kwargs):
-            Overrides the save method to generate a unique transaction reference when a new order is created.
+            Overrides the save method to generate a unique transaction
+            reference when a new order is created.
     """
 
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="orders")

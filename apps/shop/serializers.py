@@ -1,7 +1,8 @@
-from rest_framework import serializers
 from drf_spectacular.utils import extend_schema_field
+from rest_framework import serializers
 
 from apps.profiles.serializers import ShippingAddressSerializer
+from apps.shop.models import Product, Review
 
 
 class CategorySerializer(serializers.Serializer):
@@ -28,6 +29,12 @@ class ProductSerializer(serializers.Serializer):
     image1 = serializers.ImageField()
     image2 = serializers.ImageField(required=False)
     image3 = serializers.ImageField(required=False)
+    average_rating = serializers.DecimalField(max_digits=3, decimal_places=2,
+                                              read_only=True)
+    reviews_count = serializers.SerializerMethodField()
+
+    def get_reviews_count(self, obj):
+        return obj.reviews.filter(is_deleted=False).count()
 
 
 class CreateProductSerializer(serializers.Serializer):
@@ -90,3 +97,64 @@ class CheckItemOrderSerializer(serializers.Serializer):
     product = ProductSerializer()
     quantity = serializers.IntegerField()
     total = serializers.FloatField(source="get_total")
+
+
+class ReviewSerializer(serializers.Serializer):
+    id = serializers.IntegerField(read_only=True)
+    user = serializers.PrimaryKeyRelatedField(read_only=True)
+    user_full_name = serializers.CharField(source="user.fullname", read_only=True)
+    product = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.filter(is_deleted=False)
+    )
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    rating = serializers.IntegerField(min_value=1, max_value=5)
+    text = serializers.CharField(required=False, allow_null=True, allow_blank=True)
+
+    def validate(self, data):
+        request = self.context.get("request")
+        user = request.user
+        product = data.get("product")
+
+        if not user:
+            raise serializers.ValidationError("User is not authenticated")
+        if not product:
+            raise serializers.ValidationError("Product is required")
+
+        if self.instance:
+            if self.instance.user != user:
+                raise serializers.ValidationError(
+                    "You can't edit someone else's review"
+                )
+
+            if product != self.instance.product:
+                if Review.objects.filter(
+                        user=user,
+                        product=product,
+                        is_deleted=False
+                        ).exists():
+                    raise serializers.ValidationError(
+                        "You have already left a review about this product"
+                    )
+        else:
+            if Review.objects.filter(
+                    user=user,
+                    product=product,
+                    is_deleted=False
+                    ).exists():
+                raise serializers.ValidationError(
+                    "You have already left a review about this product"
+                )
+
+        return data
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        validated_data["user"] = request.user
+        return Review.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        instance.product = validated_data.get('product', instance.product)
+        instance.rating = validated_data.get('rating', instance.rating)
+        instance.text = validated_data.get('text', instance.text)
+        instance.save()
+        return instance
